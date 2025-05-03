@@ -16,17 +16,17 @@
 package io.seata.core.context;
 
 import java.util.Map;
+
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import io.seata.common.DefaultValues;
+import io.seata.common.Constants;
 import io.seata.common.exception.ShouldNeverHappenException;
 import io.seata.common.util.StringUtils;
-import io.seata.config.ConfigurationFactory;
-import io.seata.core.constants.ConfigurationKeys;
 import io.seata.core.model.BranchType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import static io.seata.core.model.BranchType.AT;
 import static io.seata.core.model.BranchType.XA;
@@ -49,6 +49,28 @@ public class RootContext {
     public static final String KEY_XID = "TX_XID";
 
     /**
+     * The constant HIDDEN_KEY_XID for sofa-rpc integration.
+     */
+    public static final String HIDDEN_KEY_XID = Constants.HIDE_KEY_PREFIX_CHAR + KEY_XID;
+
+    /**
+     * The constant KEY_TIMEOUT.
+     */
+    public static final String KEY_TIMEOUT = "TX_TIMEOUT";
+
+    /**
+     * The constant MDC_KEY_XID for logback
+     * @since 1.5.0
+     */
+    public static final String MDC_KEY_XID = "X-TX-XID";
+
+    /**
+     * The constant MDC_KEY_BRANCH_ID for logback
+     * @since 1.5.0
+     */
+    public static final String MDC_KEY_BRANCH_ID = "X-TX-BRANCH-ID";
+
+    /**
      * The constant KEY_BRANCH_TYPE
      */
     public static final String KEY_BRANCH_TYPE = "TX_BRANCH_TYPE";
@@ -61,13 +83,16 @@ public class RootContext {
 
     private static ContextCore CONTEXT_HOLDER = ContextCoreLoader.load();
 
-    private static BranchType DEFAULT_BRANCH_TYPE = BranchType.get(ConfigurationFactory.getInstance()
-            .getConfig(ConfigurationKeys.DATA_SOURCE_PROXY_MODE, DefaultValues.DEFAULT_DATA_SOURCE_PROXY_MODE));
+    private static BranchType DEFAULT_BRANCH_TYPE;
 
     public static void setDefaultBranchType(BranchType defaultBranchType) {
         if (defaultBranchType != AT && defaultBranchType != XA) {
-            throw new IllegalArgumentException("The default branch type must be AT or XA." +
-                    " the value of the argument is: " + defaultBranchType);
+            throw new IllegalArgumentException("The default branch type must be " + AT + " or " + XA + "." +
+                " the value of the argument is: " + defaultBranchType);
+        }
+        if (DEFAULT_BRANCH_TYPE != null && DEFAULT_BRANCH_TYPE != defaultBranchType && LOGGER.isWarnEnabled()) {
+            LOGGER.warn("The `{}.DEFAULT_BRANCH_TYPE` has been set repeatedly. The value changes from {} to {}",
+                RootContext.class.getSimpleName(), DEFAULT_BRANCH_TYPE, defaultBranchType);
         }
         DEFAULT_BRANCH_TYPE = defaultBranchType;
     }
@@ -89,12 +114,25 @@ public class RootContext {
      */
     public static void bind(@Nonnull String xid) {
         if (StringUtils.isBlank(xid)) {
-            throw new IllegalArgumentException("xid must be not blank");
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("xid is blank, switch to unbind operation!");
+            }
+            unbind();
+        } else {
+            MDC.put(MDC_KEY_XID, xid);
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("bind {}", xid);
+            }
+            CONTEXT_HOLDER.put(KEY_XID, xid);
         }
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("bind {}", xid);
-        }
-        CONTEXT_HOLDER.put(KEY_XID, xid);
+    }
+
+    public static Integer getTimeout() {
+        return (Integer) CONTEXT_HOLDER.get(KEY_TIMEOUT);
+    }
+
+    public static void setTimeout(Integer timeout) {
+        CONTEXT_HOLDER.put(KEY_TIMEOUT,timeout);
     }
 
     /**
@@ -117,8 +155,11 @@ public class RootContext {
     @Nullable
     public static String unbind() {
         String xid = (String) CONTEXT_HOLDER.remove(KEY_XID);
-        if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("unbind {} ", xid);
+        if (xid != null) {
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("unbind {} ", xid);
+            }
+            MDC.remove(MDC_KEY_XID);
         }
         return xid;
     }
@@ -170,7 +211,7 @@ public class RootContext {
                 return branchType;
             }
             //Returns the default branch type.
-            return DEFAULT_BRANCH_TYPE;
+            return DEFAULT_BRANCH_TYPE != null ? DEFAULT_BRANCH_TYPE : BranchType.AT;
         }
         return null;
     }
@@ -219,7 +260,8 @@ public class RootContext {
      */
     public static void assertNotInGlobalTransaction() {
         if (inGlobalTransaction()) {
-            throw new ShouldNeverHappenException();
+            throw new ShouldNeverHappenException(String.format("expect has not xid, but was:%s",
+                CONTEXT_HOLDER.get(KEY_XID)));
         }
     }
 

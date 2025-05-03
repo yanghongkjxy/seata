@@ -21,16 +21,18 @@ import java.util.concurrent.ThreadLocalRandom;
 import io.seata.common.loader.LoadLevel;
 import io.seata.common.rpc.RpcStatus;
 
+import static io.seata.discovery.loadbalance.LoadBalanceFactory.LEAST_ACTIVE_LOAD_BALANCE;
+
 /**
  * The type Least Active load balance.
  *
  * @author ph3636
  */
-@LoadLevel(name = "LeastActiveLoadBalance")
-public class LeastActiveLoadBalance extends AbstractLoadBalance {
+@LoadLevel(name = LEAST_ACTIVE_LOAD_BALANCE)
+public class LeastActiveLoadBalance implements LoadBalance {
 
     @Override
-    protected <T> T doSelect(List<T> invokers, String xid) {
+    public <T> T select(List<T> invokers, String xid) {
         int length = invokers.size();
         long leastActive = -1;
         int leastCount = 0;

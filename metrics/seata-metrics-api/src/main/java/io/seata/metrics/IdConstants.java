@@ -23,6 +23,10 @@ package io.seata.metrics;
 public interface IdConstants {
     String SEATA_TRANSACTION = "seata.transaction";
 
+    String APP_ID_KEY = "applicationId";
+    
+    String GROUP_KEY = "group";
+
     String NAME_KEY = "name";
 
     String ROLE_KEY = "role";
@@ -62,4 +66,15 @@ public interface IdConstants {
     String STATUS_VALUE_COMMITTED = "committed";
 
     String STATUS_VALUE_ROLLBACKED = "rollbacked";
+
+    String STATUS_VALUE_FAILED = "failed";
+
+    String STATUS_VALUE_TWO_PHASE_TIMEOUT = "2phaseTimeout";
+
+    String RETRY_KEY = "retry";
+
+    String STATUS_VALUE_AFTER_COMMITTED_KEY = "AfterCommitted";
+
+    String STATUS_VALUE_AFTER_ROLLBACKED_KEY = "AfterRollbacked";
+
 }

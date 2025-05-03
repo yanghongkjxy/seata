@@ -15,15 +15,28 @@
  */
 package io.seata.rm.datasource.exec.mysql;
 
+import java.math.BigDecimal;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
 import io.seata.common.exception.NotSupportYetException;
 import io.seata.common.exception.ShouldNeverHappenException;
 import io.seata.common.loader.LoadLevel;
 import io.seata.common.loader.Scope;
+import io.seata.common.util.IOUtil;
 import io.seata.common.util.StringUtils;
 import io.seata.rm.datasource.StatementProxy;
 import io.seata.rm.datasource.exec.BaseInsertExecutor;
 import io.seata.rm.datasource.exec.StatementCallback;
-import io.seata.rm.datasource.sql.struct.ColumnMeta;
+import io.seata.sqlparser.struct.ColumnMeta;
 import io.seata.sqlparser.SQLRecognizer;
 import io.seata.sqlparser.struct.Defaultable;
 import io.seata.sqlparser.struct.Null;
@@ -32,28 +45,27 @@ import io.seata.sqlparser.util.JdbcConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.HashSet;
-import java.util.Set;
-import java.util.ArrayList;
-
 /**
+ * The type My sql insert executor.
+ *
  * @author jsbxyyx
  */
 @LoadLevel(name = JdbcConstants.MYSQL, scope = Scope.PROTOTYPE)
 public class MySQLInsertExecutor extends BaseInsertExecutor implements Defaultable {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(MySQLInsertExecutor.class);
+    protected final Logger logger = LoggerFactory.getLogger(getClass());
 
     /**
      * the modify for test
      */
     public static final String ERR_SQL_STATE = "S1009";
+
+    /**
+     * The cache of auto increment step of database
+     * the key is the db's resource id
+     * the value is the step
+     */
+    public static final Map<String, BigDecimal> RESOURCE_ID_STEP_CACHE = new ConcurrentHashMap<>(8);
 
     /**
      * Instantiates a new Abstract dml base executor.
@@ -71,9 +83,9 @@ public class MySQLInsertExecutor extends BaseInsertExecutor implements Defaultab
     public Map<String,List<Object>> getPkValues() throws SQLException {
         Map<String,List<Object>> pkValuesMap = null;
         List<String> pkColumnNameList = getTableMeta().getPrimaryKeyOnlyName();
-        Boolean isContainsPk = containsPK();
+        boolean isContainsPk = containsPK();
         //when there is only one pk in the table
-        if (getTableMeta().getPrimaryKeyOnlyName().size() == 1) {
+        if (pkColumnNameList.size() == 1) {
             if (isContainsPk) {
                 pkValuesMap = getPkValuesByColumn();
             }
@@ -116,10 +128,11 @@ public class MySQLInsertExecutor extends BaseInsertExecutor implements Defaultab
             }
         }
         if (StringUtils.isBlank(autoColumnName)) {
-            throw new ShouldNeverHappenException();
+            throw new ShouldNeverHappenException("auto increment column not exist");
         }
 
-        ResultSet genKeys;
+        ResultSet genKeys = null;
+        boolean isManualCloseResultSet = false;
         try {
             genKeys = statementProxy.getGeneratedKeys();
         } catch (SQLException e) {
@@ -127,8 +140,24 @@ public class MySQLInsertExecutor extends BaseInsertExecutor implements Defaultab
             // specify Statement.RETURN_GENERATED_KEYS to
             // Statement.executeUpdate() or Connection.prepareStatement().
             if (ERR_SQL_STATE.equalsIgnoreCase(e.getSQLState())) {
-                LOGGER.warn("Fail to get auto-generated keys, use 'SELECT LAST_INSERT_ID()' instead. Be cautious, statement could be polluted. Recommend you set the statement to return generated keys.");
-                genKeys = statementProxy.getTargetStatement().executeQuery("SELECT LAST_INSERT_ID()");
+                logger.error("Fail to get auto-generated keys, use 'SELECT LAST_INSERT_ID()' instead. Be cautious, statement could be polluted. Recommend you set the statement to return generated keys.");
+                int updateCount = statementProxy.getUpdateCount();
+                try {
+                    genKeys = statementProxy.getTargetStatement().executeQuery("SELECT LAST_INSERT_ID()");
+                    // If there is batch insert
+                    // do auto increment base LAST_INSERT_ID and variable `auto_increment_increment`
+                    if (updateCount > 1 && canAutoIncrement(pkMetaMap)) {
+                        genKeys.next();
+                        BigDecimal firstId = new BigDecimal(genKeys.getString(1));
+                        return autoGeneratePks(firstId, autoColumnName, updateCount);
+                    } else {
+                        isManualCloseResultSet = true;
+                    }
+                } finally {
+                    if (!isManualCloseResultSet) {
+                        IOUtil.close(genKeys);
+                    }
+                }
             } else {
                 throw e;
             }
@@ -141,9 +170,13 @@ public class MySQLInsertExecutor extends BaseInsertExecutor implements Defaultab
         try {
             genKeys.beforeFirst();
         } catch (SQLException e) {
-            LOGGER.warn("Fail to reset ResultSet cursor. can not get primary key value");
+            logger.warn("Fail to reset ResultSet cursor. can not get primary key value");
+        } finally {
+            if (isManualCloseResultSet) {
+                IOUtil.close(genKeys);
+            }
         }
-        pkValuesMap.put(autoColumnName,pkValues);
+        pkValuesMap.put(autoColumnName, pkValues);
         return pkValuesMap;
     }
 
@@ -166,9 +199,59 @@ public class MySQLInsertExecutor extends BaseInsertExecutor implements Defaultab
         return pkValuesMap;
     }
 
+    @Deprecated
+    @SuppressWarnings("lgtm[java/database-resource-leak]")
     @Override
     public List<Object> getPkValuesByDefault() throws SQLException {
         // mysql default keyword the logic not support. (sample: insert into test(id, name) values(default, 'xx'))
         throw new NotSupportYetException();
     }
+
+    @SuppressWarnings("lgtm[java/database-resource-leak]")
+    @Override
+    public List<Object> getPkValuesByDefault(String pkKey) throws SQLException {
+        // mysql default keyword the logic not support. (sample: insert into test(id, name) values(default, 'xx'))
+        throw new NotSupportYetException();
+    }
+
+    protected Map<String, List<Object>> autoGeneratePks(BigDecimal cursor, String autoColumnName, Integer updateCount) throws SQLException {
+        BigDecimal step = BigDecimal.ONE;
+        String resourceId = statementProxy.getConnectionProxy().getDataSourceProxy().getResourceId();
+        if (RESOURCE_ID_STEP_CACHE.containsKey(resourceId)) {
+            step = RESOURCE_ID_STEP_CACHE.get(resourceId);
+        } else {
+            ResultSet increment = null;
+            try {
+                increment = statementProxy.getTargetStatement().executeQuery("SHOW VARIABLES LIKE 'auto_increment_increment'");
+
+                increment.next();
+                step = new BigDecimal(increment.getString(2));
+                RESOURCE_ID_STEP_CACHE.put(resourceId, step);
+            } finally {
+                IOUtil.close(increment);
+            }
+        }
+
+        List<Object> pkValues = new ArrayList<>();
+        for (int i = 0; i < updateCount; i++) {
+            pkValues.add(cursor);
+            cursor = cursor.add(step);
+        }
+
+        Map<String, List<Object>> pkValuesMap = new HashMap<>(1, 1.001f);
+        pkValuesMap.put(autoColumnName,pkValues);
+        return pkValuesMap;
+    }
+
+    protected boolean canAutoIncrement(Map<String, ColumnMeta> primaryKeyMap) {
+        if (primaryKeyMap.size() != 1) {
+            return false;
+        }
+
+        for (ColumnMeta pk : primaryKeyMap.values()) {
+            return pk.isAutoincrement();
+        }
+        return false;
+    }
+
 }

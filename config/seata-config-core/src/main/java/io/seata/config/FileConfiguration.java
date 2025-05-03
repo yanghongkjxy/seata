@@ -19,7 +19,9 @@ import java.io.File;
 import java.io.UnsupportedEncodingException;
 import java.net.URL;
 import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,7 +31,6 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
-import io.netty.util.internal.ConcurrentSet;
 import io.seata.common.thread.NamedThreadFactory;
 import io.seata.common.util.CollectionUtils;
 import io.seata.common.util.StringUtils;
@@ -73,6 +74,8 @@ public class FileConfiguration extends AbstractConfiguration {
 
     private final String name;
 
+    private final FileListener fileListener = new FileListener();
+
     private final boolean allowDynamicRefresh;
 
     /**
@@ -96,31 +99,26 @@ public class FileConfiguration extends AbstractConfiguration {
 
     /**
      * Instantiates a new File configuration.
-     *
+     * For seata-server side the conf file should always exists.
+     * For application(or client) side,conf file may not exists when using seata-spring-boot-starter
      * @param name                the name
      * @param allowDynamicRefresh the allow dynamic refresh
      */
     public FileConfiguration(String name, boolean allowDynamicRefresh) {
-        LOGGER.info("The file name of the operation is {}", name);
         File file = getConfigFile(name);
         if (file == null) {
             targetFilePath = null;
-        } else {
-            targetFilePath = file.getPath();
-            fileConfig = FileConfigFactory.load(file, name);
-        }
-        /**
-         * For seata-server side the conf file should always exists.
-         * For application(or client) side,conf file may not exists when using seata-spring-boot-starter
-         */
-        if (targetFilePath == null) {
             fileConfig = FileConfigFactory.load();
             this.allowDynamicRefresh = false;
         } else {
+            targetFilePath = file.getPath();
+            fileConfig = FileConfigFactory.load(file, name);
             targetFileLastModified = new File(targetFilePath).lastModified();
             this.allowDynamicRefresh = allowDynamicRefresh;
+            if (LOGGER.isDebugEnabled()) {
+                LOGGER.debug("The file name of the operation is {}", name);
+            }
         }
-
         this.name = name;
         configOperateExecutor = new ThreadPoolExecutor(CORE_CONFIG_OPERATE_THREAD, MAX_CONFIG_OPERATE_THREAD,
                 Integer.MAX_VALUE, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(),
@@ -132,64 +130,89 @@ public class FileConfiguration extends AbstractConfiguration {
             if (name == null) {
                 throw new IllegalArgumentException("name can't be null");
             }
-            String filePath = null;
+
             boolean filePathCustom = name.startsWith(SYS_FILE_RESOURCE_PREFIX);
-            if (filePathCustom) {
-                filePath = name.substring(SYS_FILE_RESOURCE_PREFIX.length());
-            } else {
-                // projectDir first
-                filePath = this.getClass().getClassLoader().getResource("").getPath() + name;
-            }
-            filePath = URLDecoder.decode(filePath, "utf-8");
-            File targetFile = new File(filePath);
-            if (!targetFile.exists()) {
-                for (String s : FileConfigFactory.getSuffixSet()) {
-                    targetFile = new File(filePath + ConfigurationKeys.FILE_CONFIG_SPLIT_CHAR + s);
-                    if (targetFile.exists()) {
-                        if (LOGGER.isInfoEnabled()) {
-                            LOGGER.info("The configuration file used is {}", targetFile.getPath());
-                        }
-                        return targetFile;
-                    }
-                }
-            } else {
-                if (LOGGER.isInfoEnabled()) {
-                    LOGGER.info("The configuration file used is {}", name);
-                }
+            String filePath = filePathCustom ? name.substring(SYS_FILE_RESOURCE_PREFIX.length()) : name;
+            String decodedPath = URLDecoder.decode(filePath, StandardCharsets.UTF_8.name());
+
+            File targetFile = getFileFromFileSystem(decodedPath);
+            if (targetFile != null) {
                 return targetFile;
             }
+
             if (!filePathCustom) {
-                URL resource = this.getClass().getClassLoader().getResource(name);
-                if (resource == null) {
-                    for (String s : FileConfigFactory.getSuffixSet()) {
-                        resource = this.getClass().getClassLoader().getResource(name + ConfigurationKeys.FILE_CONFIG_SPLIT_CHAR + s);
-                        if (resource != null) {
-                            if (LOGGER.isInfoEnabled()) {
-                                LOGGER.info("The configuration file used is {}", resource.getPath());
-                            }
-                            String path = resource.getPath();
-                            path = URLDecoder.decode(path, "utf-8");
-                            return new File(path);
-                        }
-                    }
-                } else {
-                    if (LOGGER.isInfoEnabled()) {
-                        LOGGER.info("The configuration file used is {}", name);
-                    }
-                    String path = resource.getPath();
-                    path = URLDecoder.decode(path, "utf-8");
-                    return new File(path);
+                targetFile = getFileFromClasspath(name);
+                if (targetFile != null) {
+                    return targetFile;
                 }
             }
         } catch (UnsupportedEncodingException e) {
-            LOGGER.error("file not found--" + e.getMessage(), e);
+            LOGGER.error("decode name error: {}", e.getMessage(), e);
         }
+
+        return null;
+    }
+
+    private File getFileFromFileSystem(String decodedPath) {
+
+        // run with jar file and not package third lib into jar file, this.getClass().getClassLoader() will be null
+        URL resourceUrl = this.getClass().getClassLoader().getResource("");
+        String[] tryPaths = null;
+        if (resourceUrl != null) {
+            tryPaths = new String[]{
+                // first: project dir
+                resourceUrl.getPath() + decodedPath,
+                // second: system path
+                decodedPath
+            };
+        } else {
+            tryPaths = new String[]{
+                decodedPath
+            };
+        }
+
+
+        for (String tryPath : tryPaths) {
+            File targetFile = new File(tryPath);
+            if (targetFile.exists()) {
+                return targetFile;
+            }
+
+            // try to append config suffix
+            for (String s : FileConfigFactory.getSuffixSet()) {
+                targetFile = new File(tryPath + ConfigurationKeys.FILE_CONFIG_SPLIT_CHAR + s);
+                if (targetFile.exists()) {
+                    return targetFile;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private File getFileFromClasspath(String name) throws UnsupportedEncodingException {
+        URL resource = this.getClass().getClassLoader().getResource(name);
+        if (resource == null) {
+            for (String s : FileConfigFactory.getSuffixSet()) {
+                resource = this.getClass().getClassLoader().getResource(name + ConfigurationKeys.FILE_CONFIG_SPLIT_CHAR + s);
+                if (resource != null) {
+                    String path = resource.getPath();
+                    path = URLDecoder.decode(path, StandardCharsets.UTF_8.name());
+                    return new File(path);
+                }
+            }
+        } else {
+            String path = resource.getPath();
+            path = URLDecoder.decode(path, StandardCharsets.UTF_8.name());
+            return new File(path);
+        }
+
         return null;
     }
 
     @Override
     public String getLatestConfig(String dataId, String defaultValue, long timeoutMills) {
-        String value = getConfigFromSysPro(dataId);
+        String value = getConfigFromSys(dataId);
         if (value != null) {
             return value;
         }
@@ -225,13 +248,12 @@ public class FileConfiguration extends AbstractConfiguration {
         if (StringUtils.isBlank(dataId) || listener == null) {
             return;
         }
-        configListenersMap.computeIfAbsent(dataId, key -> new ConcurrentSet<>())
+        configListenersMap.computeIfAbsent(dataId, key -> ConcurrentHashMap.newKeySet())
                 .add(listener);
         listenedConfigMap.put(dataId, ConfigurationFactory.getInstance().getConfig(dataId));
 
         // Start config change listener for the dataId.
-        FileListener fileListener = new FileListener(dataId, listener);
-        fileListener.onProcessEvent(new ConfigurationChangeEvent());
+        fileListener.addListener(dataId, listener);
     }
 
     @Override
@@ -328,50 +350,64 @@ public class FileConfiguration extends AbstractConfiguration {
 
     }
 
+    public FileConfig getFileConfig() {
+        return fileConfig;
+    }
+
     /**
      * The type FileListener.
      */
     class FileListener implements ConfigurationChangeListener {
 
-        private final String dataId;
-        private final ConfigurationChangeListener listener;
+        private final Map<String, Set<ConfigurationChangeListener>> dataIdMap = new HashMap<>();
+
         private final ExecutorService executor = new ThreadPoolExecutor(CORE_LISTENER_THREAD, MAX_LISTENER_THREAD, 0L,
                 TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(),
                 new NamedThreadFactory("fileListener", MAX_LISTENER_THREAD));
 
         /**
          * Instantiates a new FileListener.
-         *
-         * @param dataId   the data id
-         * @param listener the listener
          */
-        public FileListener(String dataId, ConfigurationChangeListener listener) {
-            this.dataId = dataId;
-            this.listener = listener;
+        FileListener() {}
+
+        public synchronized void addListener(String dataId, ConfigurationChangeListener listener) {
+            // only the first time add listener will trigger on process event
+            if (dataIdMap.isEmpty()) {
+                fileListener.onProcessEvent(new ConfigurationChangeEvent());
+            }
+
+            dataIdMap.computeIfAbsent(dataId, value -> new HashSet<>()).add(listener);
         }
 
         @Override
         public void onChangeEvent(ConfigurationChangeEvent event) {
-            while (true) {
-                try {
-                    String currentConfig =
-                        ConfigurationFactory.getInstance().getLatestConfig(dataId, null, DEFAULT_CONFIG_TIMEOUT);
-                    if (StringUtils.isNotBlank(currentConfig)) {
-                        String oldConfig = listenedConfigMap.get(dataId);
-                        if (ObjectUtils.notEqual(currentConfig, oldConfig)) {
-                            listenedConfigMap.put(dataId, currentConfig);
-                            event.setDataId(dataId).setNewValue(currentConfig).setOldValue(oldConfig);
-                            listener.onChangeEvent(event);
+            Boolean enabled = Boolean.valueOf(System.getProperty("file.listener.enabled", "true"));
+            while (enabled) {
+                for (String dataId : dataIdMap.keySet()) {
+                    try {
+                        String currentConfig =
+                                ConfigurationFactory.getInstance().getLatestConfig(dataId, null, DEFAULT_CONFIG_TIMEOUT);
+                        if (StringUtils.isNotBlank(currentConfig)) {
+                            String oldConfig = listenedConfigMap.get(dataId);
+                            if (ObjectUtils.notEqual(currentConfig, oldConfig)) {
+                                listenedConfigMap.put(dataId, currentConfig);
+                                event.setDataId(dataId).setNewValue(currentConfig).setOldValue(oldConfig);
+
+                                for (ConfigurationChangeListener listener : dataIdMap.get(dataId)) {
+                                    listener.onChangeEvent(event);
+                                }
+                            }
                         }
+                    } catch (Exception exx) {
+                        LOGGER.error("fileListener execute error, dataId :{}", dataId, exx);
                     }
-                } catch (Exception exx) {
-                    LOGGER.error("fileListener execute error:{}", exx.getMessage());
                 }
                 try {
                     Thread.sleep(LISTENER_CONFIG_INTERVAL);
                 } catch (InterruptedException e) {
                     LOGGER.error("fileListener thread sleep error:{}", e.getMessage());
                 }
+                enabled = Boolean.valueOf(System.getProperty("file.listener.enabled", "true"));
             }
         }
 

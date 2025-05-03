@@ -19,10 +19,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import io.seata.common.util.NumberUtils;
 import io.seata.saga.statelang.domain.TaskState.ExceptionMatch;
+import io.seata.saga.statelang.domain.TaskState.Loop;
 import io.seata.saga.statelang.domain.TaskState.Retry;
 import io.seata.saga.statelang.domain.impl.AbstractTaskState;
 import io.seata.saga.statelang.domain.impl.AbstractTaskState.ExceptionMatchImpl;
+import io.seata.saga.statelang.domain.impl.AbstractTaskState.LoopImpl;
 import io.seata.saga.statelang.domain.impl.AbstractTaskState.RetryImpl;
 
 /**
@@ -44,6 +47,18 @@ public abstract class AbstractTaskStateParser extends BaseStatePaser {
         Object isPersist = nodeMap.get("IsPersist");
         if (Boolean.FALSE.equals(isPersist)) {
             state.setPersist(false);
+        }
+
+        // customize if update origin or append new retryStateInstLog
+        Object isRetryPersistModeUpdate = nodeMap.get("IsRetryPersistModeUpdate");
+        if (isRetryPersistModeUpdate instanceof Boolean) {
+            state.setRetryPersistModeUpdate(Boolean.TRUE.equals(isRetryPersistModeUpdate));
+        }
+
+        // customize if update last or append new compensateStateInstLog
+        Object isCompensatePersistModeUpdate = nodeMap.get("IsCompensatePersistModeUpdate");
+        if (isCompensatePersistModeUpdate instanceof Boolean) {
+            state.setCompensatePersistModeUpdate(Boolean.TRUE.equals(isCompensatePersistModeUpdate));
         }
 
         List<Object> retryList = (List<Object>) nodeMap.get("Retry");
@@ -70,6 +85,11 @@ public abstract class AbstractTaskStateParser extends BaseStatePaser {
         if (statusMap != null) {
             state.setStatus(statusMap);
         }
+
+        Object loopObj = nodeMap.get("Loop");
+        if (loopObj != null) {
+            state.setLoop(parseLoop(loopObj));
+        }
     }
 
     protected List<Retry> parseRetry(List<Object> retryList) {
@@ -81,14 +101,14 @@ public abstract class AbstractTaskStateParser extends BaseStatePaser {
                 retry.setExceptions((List<String>) retryMap.get("Exceptions"));
 
                 Object intervalSeconds = retryMap.get("IntervalSeconds");
-                if (intervalSeconds != null && intervalSeconds instanceof Number) {
+                if (intervalSeconds instanceof Number) {
                     retry.setIntervalSeconds(((Number) intervalSeconds).doubleValue());
                 }
 
                 retry.setMaxAttempts((Integer) retryMap.get("MaxAttempts"));
 
                 Object backoffRate = retryMap.get("BackoffRate");
-                if (backoffRate != null && backoffRate instanceof Number) {
+                if (backoffRate instanceof Number) {
                     retry.setBackoffRate(((Number) backoffRate).doubleValue());
                 }
 
@@ -111,5 +131,21 @@ public abstract class AbstractTaskStateParser extends BaseStatePaser {
             exceptionMatchList.add(exceptionMatch);
         }
         return exceptionMatchList;
+    }
+
+    protected Loop parseLoop(Object loopObj) {
+        Map<String, Object> loopMap = (Map<String, Object>)loopObj;
+        LoopImpl loop = new LoopImpl();
+
+        Object parallel = loopMap.get("Parallel");
+        loop.setParallel(NumberUtils.toInt(parallel.toString(), 1));
+
+        loop.setCollection((String)loopMap.get("Collection"));
+        loop.setElementVariableName((String)loopMap.getOrDefault("ElementVariableName", "loopElement"));
+        loop.setElementIndexName((String)loopMap.getOrDefault("ElementIndexName", "loopCounter"));
+        loop.setCompletionCondition(
+            (String)loopMap.getOrDefault("CompletionCondition", "[nrOfInstances] == [nrOfCompletedInstances]"));
+        return loop;
+
     }
 }

@@ -68,6 +68,26 @@ public class LoadBalanceTest {
     }
 
     /**
+     * Test xid load load balance select.
+     *
+     * @param addresses the addresses
+     */
+    @ParameterizedTest
+    @MethodSource("addressProvider")
+    public void testXIDLoadBalance_select(List<InetSocketAddress> addresses) throws Exception {
+        XIDLoadBalance loadBalance = new XIDLoadBalance();
+        // ipv4
+        InetSocketAddress inetSocketAddress = loadBalance.select(addresses, "127.0.0.1:8092:123456");
+        Assertions.assertNotNull(inetSocketAddress);
+        // ipv6
+        inetSocketAddress = loadBalance.select(addresses, "2000:0000:0000:0000:0001:2345:6789:abcd:8092:123456");
+        Assertions.assertNotNull(inetSocketAddress);
+        // test not found tc channel
+        inetSocketAddress = loadBalance.select(addresses, "127.0.0.1:8199:123456");
+        Assertions.assertNotEquals(inetSocketAddress.getPort(),8199);
+    }
+
+    /**
      * Test consistent hash load load balance select.
      *
      * @param addresses the addresses
@@ -77,7 +97,8 @@ public class LoadBalanceTest {
     public void testConsistentHashLoadBalance_select(List<InetSocketAddress> addresses) {
         int runs = 10000;
         int selected = 0;
-        Map<InetSocketAddress, AtomicLong> counter = getSelectedCounter(runs, addresses, new ConsistentHashLoadBalance());
+        ConsistentHashLoadBalance loadBalance = new ConsistentHashLoadBalance();
+        Map<InetSocketAddress, AtomicLong> counter = getSelectedCounter(runs, addresses, loadBalance);
         for (InetSocketAddress address : counter.keySet()) {
             if (counter.get(address).get() > 0) {
                 selected++;
@@ -155,7 +176,8 @@ public class LoadBalanceTest {
                         new InetSocketAddress("127.0.0.1", 8092),
                         new InetSocketAddress("127.0.0.1", 8093),
                         new InetSocketAddress("127.0.0.1", 8094),
-                        new InetSocketAddress("127.0.0.1", 8095))
+                        new InetSocketAddress("127.0.0.1", 8095),
+                        new InetSocketAddress("2000:0000:0000:0000:0001:2345:6789:abcd", 8092))
         );
     }
 }

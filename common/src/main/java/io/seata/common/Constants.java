@@ -47,6 +47,11 @@ public interface Constants {
     String ROW_LOCK_KEY_SPLIT_CHAR = ";";
 
     /**
+     * The constant HIDE_KEY_PREFIX_CHAR.
+     */
+    String HIDE_KEY_PREFIX_CHAR = ".";
+
+    /**
      * the start time of transaction
      */
     String START_TIME = "start-time";
@@ -65,6 +70,11 @@ public interface Constants {
      * TCC name
      */
     String ACTION_NAME = "actionName";
+
+    /**
+     * Use TCC fence
+     */
+    String USE_TCC_FENCE = "useTCCFence";
 
     /**
      * phase one method name
@@ -87,21 +97,6 @@ public interface Constants {
     String HOST_NAME = "host-name";
 
     /**
-     * The constant TCC_METHOD_RESULT.
-     */
-    String TCC_METHOD_RESULT = "result";
-
-    /**
-     * The constant TCC_METHOD_ARGUMENTS.
-     */
-    String TCC_METHOD_ARGUMENTS = "arguments";
-
-    /**
-     * transaction context
-     */
-    String TCC_ACTIVITY_CONTEXT = "activityContext";
-
-    /**
      * branch context
      */
     String TCC_ACTION_CONTEXT = "actionContext";
@@ -120,6 +115,10 @@ public interface Constants {
      */
     String OBJECT_KEY_SPRING_APPLICATION_CONTEXT = "springApplicationContext";
     /**
+     * The constant OBJECT_KEY_SPRING_CONFIGURABLE_ENVIRONMENT
+     */
+    String OBJECT_KEY_SPRING_CONFIGURABLE_ENVIRONMENT = "springConfigurableEnvironment";
+    /**
      * The constant BEAN_NAME_SPRING_APPLICATION_CONTEXT_PROVIDER
      */
     String BEAN_NAME_SPRING_APPLICATION_CONTEXT_PROVIDER = "springApplicationContextProvider";
@@ -131,4 +130,45 @@ public interface Constants {
      * The constant SAGA_TRANS_NAME_PREFIX
      */
     String SAGA_TRANS_NAME_PREFIX = "$Saga_";
+
+    /**
+     * The constant RETRY_ROLLBACKING
+     */
+    String RETRY_ROLLBACKING = "RetryRollbacking";
+
+    /**
+     * The constant RETRY_COMMITTING
+     */
+    String RETRY_COMMITTING = "RetryCommitting";
+
+    /**
+     * The constant ASYNC_COMMITTING
+     */
+    String ASYNC_COMMITTING = "AsyncCommitting";
+
+    /**
+     * The constant TX_TIMEOUT_CHECK
+     */
+    String TX_TIMEOUT_CHECK = "TxTimeoutCheck";
+
+    /**
+     * The constant UNDOLOG_DELETE
+     */
+    String UNDOLOG_DELETE = "UndologDelete";
+
+    /**
+     * The constant AUTO_COMMIT
+     */
+    String AUTO_COMMIT = "autoCommit";
+
+    /**
+     * The constant SKIP_CHECK_LOCK
+     */
+    String SKIP_CHECK_LOCK = "skipCheckLock";
+
+    /**
+     * The constant REGISTRY_TYPE_SPLIT_CHAR.
+     */
+    String REGISTRY_TYPE_SPLIT_CHAR = ",";
+
 }

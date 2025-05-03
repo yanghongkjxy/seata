@@ -20,18 +20,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import io.seata.common.loader.LoadLevel;
 
+import static io.seata.discovery.loadbalance.LoadBalanceFactory.ROUND_ROBIN_LOAD_BALANCE;
+
 /**
  * The type Round robin load balance.
  *
  * @author slievrly
  */
-@LoadLevel(name = "RoundRobinLoadBalance")
-public class RoundRobinLoadBalance extends AbstractLoadBalance {
+@LoadLevel(name = ROUND_ROBIN_LOAD_BALANCE)
+public class RoundRobinLoadBalance implements LoadBalance {
 
     private final AtomicInteger sequence = new AtomicInteger();
 
     @Override
-    protected <T> T doSelect(List<T> invokers, String xid) {
+    public <T> T select(List<T> invokers, String xid) {
         int length = invokers.size();
         return invokers.get(getPositiveSequence() % length);
     }

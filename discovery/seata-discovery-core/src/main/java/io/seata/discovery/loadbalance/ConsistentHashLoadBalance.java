@@ -24,23 +24,29 @@ import java.util.TreeMap;
 import io.seata.common.loader.LoadLevel;
 import io.seata.config.ConfigurationFactory;
 
-import static io.seata.config.ConfigurationKeys.FILE_CONFIG_SPLIT_CHAR;
-import static io.seata.config.ConfigurationKeys.FILE_ROOT_REGISTRY;
 import static io.seata.common.DefaultValues.VIRTUAL_NODES_DEFAULT;
+import static io.seata.discovery.loadbalance.LoadBalanceFactory.CONSISTENT_HASH_LOAD_BALANCE;
+import static io.seata.discovery.loadbalance.LoadBalanceFactory.LOAD_BALANCE_PREFIX;
 
 /**
  * The type consistent hash load balance.
  *
  * @author ph3636
  */
-@LoadLevel(name = "ConsistentHashLoadBalance")
-public class ConsistentHashLoadBalance extends AbstractLoadBalance {
+@LoadLevel(name = CONSISTENT_HASH_LOAD_BALANCE)
+public class ConsistentHashLoadBalance implements LoadBalance {
 
-    private static final String VIRTUAL_NODES = FILE_ROOT_REGISTRY + FILE_CONFIG_SPLIT_CHAR + "loadBalanceVirtualNodes";
-    private static final int VIRTUAL_NODES_NUM = ConfigurationFactory.CURRENT_FILE_INSTANCE.getInt(VIRTUAL_NODES, VIRTUAL_NODES_DEFAULT);
+    /**
+     * The constant LOAD_BALANCE_CONSISTENT_HASH_VIRTUAL_NODES.
+     */
+    public static final String LOAD_BALANCE_CONSISTENT_HASH_VIRTUAL_NODES = LOAD_BALANCE_PREFIX + "virtualNodes";
+    /**
+     * The constant VIRTUAL_NODES_NUM.
+     */
+    private static final int VIRTUAL_NODES_NUM = ConfigurationFactory.getInstance().getInt(LOAD_BALANCE_CONSISTENT_HASH_VIRTUAL_NODES, VIRTUAL_NODES_DEFAULT);
 
     @Override
-    protected <T> T doSelect(List<T> invokers, String xid) {
+    public <T> T select(List<T> invokers, String xid) {
         return new ConsistentHashSelector<>(invokers, VIRTUAL_NODES_NUM).select(xid);
     }
 
@@ -64,6 +70,7 @@ public class ConsistentHashLoadBalance extends AbstractLoadBalance {
         }
     }
 
+    @SuppressWarnings("lgtm[java/weak-cryptographic-algorithm]")
     private static class MD5Hash implements HashFunction {
         MessageDigest instance;
         public MD5Hash() {
